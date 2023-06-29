@@ -1,0 +1,451 @@
+---
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+
+# RNAseq downstream analysis      
+
+
+```{r eval=FALSE, include=FALSE}
+####
+## this is a custom script for standard RNAseq downstream analysis, basically for differential expression
+##     several tools available: DESeq2/edgeR/limma 
+##     Shaorui, Liu; 2018 in THU LLab; liushaorui@mail.bnu.edu.cn
+##     
+## modified in Westlake, 202009, only edgeR kept 
+##     adjust the code to knit as a clean report
+##         for mouse data
+##         size of figure
+##         hide most code
+##     rewrite PCA/tSNE process
+##     add auto-output for official GSEA software
+##         TMM-counts
+##         cls-setting
+##     
+####
+```
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#necessary packages and functions  
+source("I:/Shared_win/projects/RNA_normal/analysis.r")
+```
+
+
+## load expression mtx       
+
+```{r echo=FALSE}
+## specify matrix path and name to save files then
+#    dat:  output matrix from RNAseq pipeline, RNAseq.date_SS2_name.counts.gene.matrix
+#    mtxname:  usuall as same as date_SS2_name
+dat = ''
+mtxname = ''
+
+## specify names of 'A vs B', and cell idx of As and Bs
+#    Control usually as B
+Aname = "" 
+Bname = ""  
+
+Aidx = c(9:12)
+Bidx = c(5:8)
+
+## specify filtering cutoffs
+cut_count = 2 
+cut_cell = 3
+
+#
+mat_raw <- read.table(dat, header = TRUE, stringsAsFactors = F , sep = "\t")
+rownames(mat_raw) <- mat_raw$gene_id
+
+## if pre-processed as csv
+#mat_raw <- read.csv(dat, header = T)
+#rownames(mat_raw) <- mat_raw$gene
+
+mat_raw <- mat_raw[,2:ncol(mat_raw)]
+mat_raw <- as.matrix(mat_raw)
+
+# round the reads count from rsem output
+#     do CPM first
+mat_raw <- edgeR::cpm(mat_raw)
+mat_raw <- round(mat_raw)
+
+# choose only protein_coding genes
+list_pc <- 'I:/Shared_win/genomics/mouse/GRCm38_vM25/gtf_detail/list_pc.lv1_2'
+id_pc <- as.vector(unlist(read.table(list_pc)))
+mat_pc <- mat_raw[id_pc,]
+
+# filter for genes that expressed (CPM > 2) in at least 3 cells
+#mat_pc <- mat_pc[rowSums(mat_pc[,c(Aidx,Bidx)] >cut_count) >= cut_cell,]
+mat_pc <- mat_pc[rowSums(mat_pc[,c(Aidx)] >cut_count) >= cut_cell |
+                   rowSums(mat_pc[,c(Bidx)] >cut_count) >= cut_cell,]
+#matz_pc <- zscore_mat(log2(mat_pc+1))
+```
+
+
+check raw counts matrix       
+```{r paged.print=FALSE}
+dim(mat_raw)
+head(mat_raw)
+```
+       
+       
+check filtered pc(protein coding) matrix        
+```{r paged.print=FALSE}
+dim(mat_pc[,c(Aidx,Bidx)])
+head(mat_pc[,c(Aidx,Bidx)])
+``` 
+ 
+```{r echo=FALSE}
+cat(paste0("get ",dim(mat_pc)[1]," filtered (cpm > ",cut_count," in at least ",cut_cell," cells) protein-coding genes for next analysis"))
+```
+
+
+## QC  
+
+design info  
+```{r echo=FALSE, paged.print=FALSE}
+design <- data.frame(condition=factor(c(rep(Aname,length(Aidx)),rep(Bname,length(Bidx)))),
+#                     replicate=factor(c(paste0("rep",1:length(Aidx)),paste0("rep",1:length(Bidx)))))
+                     replicate=factor(colnames(mat_pc[,c(Aidx,Bidx)])))
+rownames(design) <- colnames(mat_pc[,c(Aidx,Bidx)])
+
+design
+```
+
+
+### condition mean expression              
+
+```{r cross1, echo=FALSE, fig.height=6, fig.width=6, warning=FALSE}
+plot(data.frame(Aname=rowMeans(mat_raw[rowSums(mat_raw[,c(Aidx,Bidx)])!=0,][,Aidx]),
+                Bname=rowMeans(mat_raw[rowSums(mat_raw[,c(Aidx,Bidx)])!=0,][,Bidx])), pch=20, log = 'xy',
+     xlab = paste0("Mean normalized counts (",Aname,")"),xlim=c(0.1,100000),
+     ylab = paste0("Mean normalized counts (",Bname,")"),ylim=c(0.1,100000),
+     main = paste0("expressed ",dim(mat_raw[rowSums(mat_raw)!=0,])[1]," genes of total ",dim(mat_raw)[1]," genes "))
+```
+
+
+```{r cross2, echo=FALSE, fig.height=6, fig.width=6, warning=FALSE}
+plot(data.frame(Aname=rowMeans(mat_pc[,Aidx]),
+                Bname=rowMeans(mat_pc[,Bidx])), pch=20, log = 'xy',
+     xlab = paste0("Mean normalized counts (",Aname,")"),xlim=c(0.1,100000),
+     ylab = paste0("Mean normalized counts (",Bname,")"),ylim=c(0.1,100000),
+     main = paste0(dim(mat_pc)[1]," filtered protein coding genes "))
+```
+
+
+### PCA          
+
+```{r include=FALSE}
+rv <- rowVars(mat_pc[,c(Aidx,Bidx)])
+selt <- order(rv, decreasing = TRUE)[seq_len(2000)]
+pca2 <- stats::prcomp(t(mat_pc[selt,c(Aidx,Bidx)]), scale.=TRUE, center= TRUE)
+#pca2$x
+
+pca_d <- as.data.frame(pca2$x)
+
+pca_d[,"condition"] = design$condition
+pca_d[,"batch"] = rownames(design)
+pca_d[,"replicate"] = design$replicate
+```
+
+
+```{r echo=FALSE}
+plot(pca2$sdev,pch=20, xlab="PC",ylab="Standard Variation", main="PCs of top2000 highly variable genes")
+```
+
+
+
+```{r echo=FALSE, fig.height=5.1, fig.width=6, message=FALSE, warning=FALSE}
+#plot the PCA
+#create a classic 2-dimension PCA plot (first two principal components) with conditions and library methods indicated
+cols <- c("#481567FF","#1F968BFF","#B5640B")
+#
+cols <- c(cols[3], cols[2])
+names(cols) <- c(as.character(unique(design$condition)[1]),
+                 as.character(unique(design$condition)[2]))
+
+#p1 = ggplot(data=pca_d, aes(x=PC1, y=PC2, color=condition, shape=condition))
+p1 = ggplot(data=pca_d, aes(x=PC1, y=PC2, color=condition))
+p1 = p1 + geom_point(size=3.5)
+p1 = p1 + ggrepel::geom_text_repel(mapping = aes(label=pca_d$batch),size=2.5)
+#p1 = p1 + stat_ellipse(type="norm", linetype=2)
+p1 = p1 + labs(title="PCA\nusing CPM(top2000 highly variable genes) ",
+               color="Condition", shape="batch")
+p1 = p1 + scale_colour_manual(values = cols) + guides(color=guide_legend(reverse = T))
+#p1 = p1 + scale_shape_manual(values=c(16,17,15))
+
+p1 = p1 + theme_classic() + theme(panel.grid = element_blank())
+p1
+```
+
+
+
+```{r echo=FALSE, fig.height=5.1, fig.width=6, message=FALSE, warning=FALSE}
+#plot the PCA
+#create a classic 2-dimension PCA plot (first two principal components) with conditions and library methods indicated
+#
+p2 = ggplot(data=pca_d, aes(x=PC3, y=PC4, color=condition))
+p2 = p2 + geom_point(size=3.5)
+p2 = p2 + ggrepel::geom_text_repel(mapping = aes(label=pca_d$batch),size=2.5)
+#p2 = p2 + stat_ellipse(type="norm", linetype=2)
+p2 = p2 + labs(title="PCA\nusing CPM(top2000 highly variable genes) ",
+               color="Condition", shape="batch")
+p2 = p2 + scale_colour_manual(values = cols)  + scale_colour_manual(values = cols) + guides(color=guide_legend(reverse = T)) +
+  theme_classic() + theme(panel.grid = element_blank())
+  
+#p2 = p2 + scale_shape_manual(values=c(16,17,15))
+
+# PCA3-4 only for a glance,
+# in some case, like complicated and big batch effects but small biological difference, then the condition-control variance might be on PC2 or even PC3
+p2
+```
+
+
+
+### tSNE       
+
+```{r echo=FALSE, message=FALSE, warning=FALSE,fig.width=6,fig.height=5.1}
+set.seed(133)
+PCs <- 1:6
+PCss <- paste0(PCs[1],":",PCs[length(PCs)])
+pca2.emb <- pca2$x %*% diag(pca2$sdev**2)
+tsne_out <- Rtsne::Rtsne(
+  as.matrix(pca2.emb[,PCs]),
+  pca = FALSE,
+  perplexity = 2,
+  max_iter = 2000
+)
+
+#cols <- c("Meninges" = "#481567FF", "nonMeninges" = "#1F968BFF")
+p6 = ggplot(data=data.frame(tsne_out$Y), aes(x=X1, y=X2)) + labs(x="tSNE_1",y="tSNE_2", seed=FALSE) + 
+  #geom_point(aes(colour=design$condition, shape=design$condition),size=3.5) + 
+  geom_point(aes(colour=design$condition),size=3.5) + 
+#  stat_ellipse(aes(colour=design$condition),type="norm", linetype=2) + 
+   ggrepel::geom_text_repel(mapping = aes(label=colnames(mat_pc[,c(Aidx,Bidx)])),size=2.5) + 
+  scale_colour_manual(values = cols, ) + guides(color=guide_legend(reverse = T)) + 
+  #scale_shape_manual(values=c(16:10)) + 
+   labs(title=paste0("tSNE\nusing PC",PCss),
+               color="Condition", shape="batch") + theme_classic()
+
+# for usual RNAseq with a small number of samples, like 2 or 3 conditions, each 3 to 4 samples
+#     PC1-2 is already enough, tsne is not necessary
+p6
+```
+
+
+
+### correlation        
+
+```{r include=FALSE}
+#define a function to plot correlation  
+plotCor <- function(Mat){
+  library(edgeR)
+  library(corrplot)
+  Cor <- cor(log2(edgeR::cpm(Mat)+1))
+  par(cex=0.54, pin=c(8,8))
+  corrplot(Cor,method="number",title = "pearson correlation of log2(CPM+1)",mar = c(0, 0, 1, 0))
+}
+```
+
+
+
+correlation (log2(CPM+1)) of all filtered protein-coding genes  
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=6.8, fig.height=6.8}
+plotCor(mat_pc)  # this one is only for checking the lower color cutoff
+```
+
+correlation (log2(CPM+1)) of all filtered protein-coding genes, grouping by correlation     
+
+```{r echo=FALSE,message=FALSE,warning=FALSE,fig.width=5,fig.height=5}
+  Ret_mat <- log2(mat_pc[,c(Aidx,Bidx)]+1)
+  Ret_cor <- cor(Ret_mat)
+  
+  lower = 0.70
+  upper = 1
+  pal <- "Reds"
+  
+  ht1 <- ComplexHeatmap::Heatmap(Ret_cor, col = circlize::colorRamp2(seq(lower, upper, ((upper-lower)/7)),RColorBrewer::brewer.pal(8, pal)),
+                  heatmap_legend_param = list(
+                  color_bar = "continuous",
+                  legend_direction = "horizontal",
+                  legend_width = unit(5, "cm"),
+                  title_position = "topcenter"),
+                  name = "Pearson correlation of all filtered protein-coding genes",
+                  column_names_gp = grid::gpar(fontsize = 10),
+                  row_names_gp = grid::gpar(fontsize = 10),
+                  top_annotation = NULL)
+  heatplot <- ComplexHeatmap::draw(ht1, heatmap_legend_side = "top")
+``` 
+
+using only top2000 highly variable          
+
+```{r echo=FALSE,message=FALSE,warning=FALSE,fig.width=5,fig.height=5}
+  Ret_mat <- log2(mat_pc[selt,c(Aidx,Bidx)]+1)
+  Ret_cor <- cor(Ret_mat)
+  
+  lower = 0.70
+  upper = 1
+  pal <- "Reds"
+  
+  ht1 <- ComplexHeatmap::Heatmap(Ret_cor, col = circlize::colorRamp2(seq(lower, upper, ((upper-lower)/7)),RColorBrewer::brewer.pal(8, pal)),
+                  heatmap_legend_param = list(
+                  color_bar = "continuous",
+                  legend_direction = "horizontal",
+                  legend_width = unit(5, "cm"),
+                  title_position = "topcenter"),
+                  name = "Pearson correlation of highly variable genes",
+                  column_names_gp = grid::gpar(fontsize = 10),
+                  row_names_gp = grid::gpar(fontsize = 10),
+                  top_annotation = NULL)
+  heatplot <- ComplexHeatmap::draw(ht1, heatmap_legend_side = "top")
+``` 
+
+
+## Differential Analysis                
+
+
+```{r echo=FALSE}
+# here gsea is just a quick check with only DEGs as input
+#     p and fc wouldn't affect the whole DEG output
+ret <- run_MEedgeR(MAT = mat_pc[,c(Aidx,Bidx)], ED = Aname, WT = Bname, n1 = length(Aidx),n2 = length(Bidx),
+                         lcm = 0, padj = 0.05,lfc = log2(1.5), gsea = TRUE)
+```
+
+
+```{r}
+ret$SUM
+```
+
+```{r echo=FALSE, paged.print=FALSE}
+ret$gsea
+```
+
+```{r eval=FALSE, include=FALSE}
+## using cutoff: *pvalue* 0.05, FC 1.5
+#
+# if few DEGs are found, could use raw pvalue for exploration,
+# should note that then the results could be full of false-positives,
+# and should consider the data quality and other QCs to determine
+```
+
+    
+```{r echo=FALSE, message=FALSE, warning=FALSE,fig.width=5,fig.height=5}
+# default here is to show top40 for A-up or B-up
+# 'Label' is for manual labeling which would ignore Sign_dn/up
+# the color is not modified in auto-corplot 
+# details see code in finalplot()
+rets <- finalplot(mat_pc[,c(Aidx,Bidx)],data.frame(ret$DEG_edgeR), paste0(Aname,"_vs_",Bname), 0.05, 1.5, 
+                  Sign = FALSE, Sign_dn = 40, Sign_up = 40, padjust = T, Label = NULL)
+```
+
+
+```{r echo=FALSE, fig.height=8, fig.width=10.8, warning=FALSE}
+rets$vol
+```
+ 
+ 
+```{r echo=FALSE, fig.height=9.6, fig.width=5.8}
+genes <- c(rets$up[1:40],rets$down[40:1])
+pheatmap(log2(mat_pc[genes,c(Aidx,Bidx)]+1),cluster_rows = F, cluster_cols = F,
+         main = "top log2(CPM+1)", 
+         #gaps_row = length(rets$up), 
+         gaps_row = 40, 
+         gaps_col = length(Aidx))
+```
+
+ 
+```{r echo=FALSE, fig.height=9.6, fig.width=5.8}
+pheatmap::pheatmap(zscore_mat(log2(mat_pc[genes,c(Aidx,Bidx)]+1)),cluster_rows = F, cluster_cols = F,
+         main = "top zscore", 
+         color = color.test, 
+         #gaps_row = length(rets$up), 
+         gaps_row = 40, 
+         gaps_col = length(Aidx),
+         breaks = seq(-2,2,0.04))
+```
+
+
+```{r echo=FALSE, fig.height=9.6, fig.width=9.8}
+# if raw matrix with more conditions, could check them all for top DEGs here
+# or could close this chunk
+pheatmap(log2(mat_raw[genes,]+1),cluster_rows = F, cluster_cols = F,
+         main = "top log2(CPM+1)", 
+         #gaps_row = length(rets$up), 
+         gaps_row = 40, 
+         gaps_col = c(4,8))
+```
+
+ 
+```{r echo=FALSE, fig.height=9.6, fig.width=9.8}
+# if raw matrix with more conditions, could check them all for top DEGs here 
+# or could close this chunk
+pheatmap::pheatmap(zscore_mat(log2(mat_raw[genes,]+1)),cluster_rows = F, cluster_cols = F,
+         main = "top zscore", 
+         color = color.test, 
+         #gaps_row = length(rets$up), 
+         gaps_row = 40, 
+         gaps_col = c(4,8),
+         breaks = seq(-2,2,0.04))
+```
+
+
+```{r eval=FALSE, include=FALSE}
+write.table(rec_gcol(data.frame(ret$DEG_edgeR)), paste0("edgeR_DEGs.",
+           Aname,"_vs_",Bname,".csv"),
+           col.names = TRUE, row.names = FALSE,quote=FALSE, sep=",")
+```
+ 
+ 
+```{r eval=FALSE, include=FALSE}
+# for GSEA input
+# need to build a folder named 'GSEA_mit' at first
+# check https://www.gsea-msigdb.org/gsea/doc/GSEAUserGuideFrame.html
+
+proc.mat <- function(Mat){
+  Mat <- cbind(rownames(Mat),"NA",Mat)
+  colnames(Mat)[1:2] <- c("NAME","DESCRIPTION")
+  return(Mat)
+}
+
+write.table(proc.mat(Mat=ret$TMM$counts[rownames(ret$DEG_edgeR),]),
+            paste0("GSEA_mit/RNAseq.",mtxname,".",Aname,"_vs_",Bname,".filt_tmm.pc_gene.txt"),
+            col.names = TRUE, row.names = FALSE, sep = "\t", quote = FALSE)
+
+write.table(c(paste0(ncol(mat_pc[,c(Aidx,Bidx)])," 2 1"),
+              paste0("# ",Aname," ",Bname),
+              paste(c(rep("1",length(Aidx)),rep("0",length(Bidx))),collapse = " ")),
+            paste0("GSEA_mit/RNAseq.",mtxname,".",Aname,"_vs_",Bname,".cls"),
+            col.names = FALSE, row.names = FALSE, sep = "\t", quote = FALSE)
+
+```
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
