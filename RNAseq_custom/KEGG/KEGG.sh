@@ -1,0 +1,131 @@
+#!/bin/bash
+# This a script for KEGG Analysis. 
+# Liu. Shaorui; liushaorui@mail.bnu.edu.cn; 2018.1.4
+
+# transmit arguments from shell -O arg
+getopts "O:" arg
+
+case $arg in
+  O)
+   ORG=$OPTARG
+    ;;
+  ?)
+    echo "Unknown Org code, please set -O xxx"
+    exit 1
+    ;;
+esac
+
+echo "Organism code is: $ORG"
+
+# list DEG_*
+ls DEG_* > DEGlist
+echo "Count is as follows:"
+wc -l DEGlist
+wc -l DEG_*
+
+# ask for permission to continue the analysis 
+echo "Would you like to continue the KEGG Enrichment Analysis?"
+read -p "[y/n]" ch
+
+case $ch in
+n)
+echo "Program Stopped."
+rm DEGlist
+exit 1
+;;
+
+# the ";;" for "y)" and the "esac" for "case" are in the end of this script 
+y)
+# select DEG_files in pairs into DEGslist
+#gawk -F '.High' -vOFS="" '{$1=$1;$2=""}1' DEGlist |uniq -d > DEGslist
+#rm DEGlist
+mv DEGlist DEGslist
+
+echo "Analysis continues"
+
+# download ${ORG}00001.keg from KEGG, parse it into ID_Convert_${ORG}
+wget http://rest.kegg.jp/get/br:${ORG}00001 -O ${ORG}00001.keg
+export ORG
+perl -alne '{if(/^C/){/PATH:$ENV{'ORG'}(\d+)/;$kegg=$1}
+             else{print "$kegg\t$F[1]\t$F[2]" if /^D/ and $kegg;}
+            }' ${ORG}00001.keg > ID_Convert_${ORG}_1
+
+gawk -F "\t" '{print $3"\t"$2}' ID_Convert_${ORG}_1 |sort -k1 -u|
+              grep ";" |sort -k1 |sed 's/;//g' > ID_Convert_${ORG}
+rm ID_Convert_${ORG}_1 ${ORG}00001.keg
+
+# get DEGs form each pair of DEG_*
+for row in $(<DEGslist)
+do
+{
+# mkdir a temp directory  
+   mkdir temp_KEGG_${row#*_} 
+# start to process DEG_*
+   for file in $row*
+   do
+       #cut -f 1,5 $file > temp_KEGG_${row#*_}/${row}_${file#*.}
+       cut -f 1,5 $file > temp_KEGG_${row#*_}/DEGs${row}_1
+   done
+  
+   cd temp_KEGG_${row#*_}
+   #cat ${row}_High_in* |sort -k1 > DEGs${row}_1
+   #rm ${row}_High_in*
+
+   
+ 
+# convert gene symbol to entrez id, output 1.symbol 2.entrez id 3.log2FC 
+# ID_Convert_? must be 1 to 1 on symbol-entrezid, or make mistake  
+   gawk 'NR==FNR{a[$1]=$1;next}$1 in a{print $1"\t"$2}' \
+   DEGs${row}_1 ../ID_Convert_${ORG} |sort -k1 > DEGs${row}_2
+
+   gawk 'NR==FNR{a[$1]=$1;next}$1 in a{print $1"\t"$2}' \
+   DEGs${row}_2 DEGs${row}_1 |sort -k1 > DEGs${row}_3
+
+   paste DEGs${row}_2 DEGs${row}_3 |gawk '{print $1"\t"$2"\t"$4}' > DEGs${row}_4
+
+# replace log2FC with pathway object colour
+# >0 red, <0 light purple, the default bg colour is green/white
+   gawk -F "\t" '{if($3>0){$3="FF6726"} else{$3="E5BCFF"};\
+   print $1"\t"$2"\t"$3}' DEGs${row}_4 > DEGs_${row#*_}
+   rm DEGs${row}_*
+   
+   cp $(which KEGG.R) ./
+   mv DEGs_${row#*_} DEGs 
+  
+# KEGG enrichment analysis using R package clusterProfiler 
+   Rscript KEGG.R $ORG
+
+# catch png url in .args file from KEGG.R output, download
+   #for NAME in ./*.args;do \
+   #m=$(grep mark_pathway $NAME \
+   #|grep img |cut -d "" -f 2\
+   #|sed 's/src=\"//g;s/\"//g;s/\/tmp\//www\.genome\.jp\/tmp\//g');\
+   #wget $m -P ./KEGG_PNG_Pathway_${row#*_} ;\
+   #done
+
+   gawk '{print $2}' KEGG_Pathway_Link.xls > KEGG_Pathway_Link1.xls
+   paste KEGGSummary.xls KEGG_Pathway_Link1.xls > KEGG_Summary_${row#*_}.xls
+   
+   mv KEGG_Pathway_Enrichment.pdf KEGG_Pathway_Enrichment_${row#*_}.pdf
+   mv KEGG_Pathway_Enrichment.png KEGG_Pathway_Enrichment_${row#*_}.png   
+
+   rm DEGs KEGGSummary.xls KEGG_Pathway_Link* KEGG.R
+   rm *.args 
+   
+   mv * ../
+
+   cd ..
+   rm -r temp_KEGG_${row#*_} 
+}&
+done
+wait
+#rm ID_Convert_${ORG} DEGslist
+;;
+
+*)
+rm DEGlist
+echo "Input error. Please try agian."
+KEGG.sh -O $ORG
+;;
+esac    
+ 

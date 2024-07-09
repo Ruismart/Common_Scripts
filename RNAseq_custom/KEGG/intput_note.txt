@@ -1,0 +1,9 @@
+input should be 'tab'-separated text file named as:   DEG_xxx,  
+multiple files could be processed parallelly, just put them together in current working directory                          
+        
+the current format should be:         
+gene - 0 - 0 - foldchange( >0: red,  <0: blue in kegg map)
+
+geneA  0  0  2
+geneB  0  0  1.5
+geneC  0  0  3          
