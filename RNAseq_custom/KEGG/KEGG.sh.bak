@@ -64,7 +64,7 @@ do
    for file in $row*
    do
        #cut -f 1,5 $file > temp_KEGG_${row#*_}/${row}_${file#*.}
-       cut -f 1,2 $file > temp_KEGG_${row#*_}/DEGs${row}_1
+       cut -f 1,4 $file > temp_KEGG_${row#*_}/DEGs${row}_1
    done
   
    cd temp_KEGG_${row#*_}

@@ -1,9 +1,11 @@
-input should be 'tab'-separated text file named as:   DEG_xxx,  
-multiple files could be processed parallelly, just put them together in current working directory                          
-        
-the current format should be:         
-gene - 0 - 0 - foldchange( >0: red,  <0: blue in kegg map)
-
-geneA  0  0  2
-geneB  0  0  1.5
-geneC  0  0  3          
+input should be 'tab'-separated text file named as:   DEG_xxx,                
+multiple files could be processed parallelly, just put them together in current working directory                             
+(for easy use, the kegg map download part is closed, just write the url into final csv)        
+(better to update clusterProfiler to latest version, if no output for enrichKEGG)             
+                 
+the DEG format should be:          
+gene - foldchange( >0: red,  <0: purple in kegg map)               
+               
+geneA	2              
+geneB	2             
+geneC	2           
