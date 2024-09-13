@@ -113,7 +113,7 @@ p3 <- p2 + scale_color_gradient(low = "#FFFF94",high = "red")
 # set coordinate details
 p4 <- p3 + labs(color=expression(-log[10](FDR)),
                 size="Gene Count",x="Rich Factor",y="Pathway Description",
-                title ="Top 20 GO:BP Pathway Enrichment")
+                title =paste0("Top 20 GO:",db_name," Pathway Enrichment"))
 # cancle grid lines
 p5 <- p4 + theme_bw() + theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank())
 # save as ...
